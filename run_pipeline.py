@@ -269,7 +269,8 @@ def step_train(args):
         # Здесь можно добавить код для загрузки из Earth Engine
         # Для happy path — используем демо-данные
         print("   ⚠️ Для реальных данных используйте batch export через Earth Engine")
-        return step_train(args._replace(use_demo=True))
+        args.use_demo = True
+        return step_train(args)
 
     # Обучение модели
     from model import train_model
@@ -395,7 +396,8 @@ def step_validate(args):
             )
         else:
             print("⚠️ DAHITI credentials не указаны, используем демо-данные")
-            return step_validate(args._replace(use_demo=True))
+            args.use_demo = True
+            return step_validate(args)
 
     # Загружаем предсказания
     pred_df = pd.read_csv("data/processed/predictions_aggregated.csv")
