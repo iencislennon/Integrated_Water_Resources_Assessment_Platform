@@ -21,6 +21,10 @@ import argparse
 import os
 import sys
 import json
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения из .env
+load_dotenv()
 
 # Добавляем src в path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
