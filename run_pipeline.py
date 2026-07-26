@@ -6,7 +6,7 @@ End-to-end пайплайн: от сырых данных до даунскей�
 Happy path — минимальная конфигурация для демо-прототипа.
 
 Использование:
-    python run_pipeline.py --project-id YOUR_GCP_PROJECT_ID --dahiti-user USER --dahiti-pass PASS
+    python run_pipeline.py --project-id YOUR_GCP_PROJECT_ID --dahiti-api-key YOUR_DAHITI_API_KEY
 
 Или пошагово:
     python run_pipeline.py --step init
@@ -52,22 +52,16 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--dahiti-user",
-        default=os.environ.get("DAHITI_USER", None),
-        help="Логин DAHITI"
-    )
-
-    parser.add_argument(
-        "--dahiti-pass",
-        default=os.environ.get("DAHITI_PASS", None),
-        help="Пароль DAHITI"
+        "--dahiti-api-key",
+        default=os.environ.get("DAHITI_API_KEY", None),
+        help="Персональный API-ключ DAHITI (не логин/пароль от сайта, см. https://dahiti.dgfi.tum.de/en/frequently-asked-questions/api-key/)"
     )
 
     parser.add_argument(
         "--dahiti-id",
         type=int,
-        default=1000133634,
-        help="ID оз. Балхаш в DAHITI (по умолчанию: 1000133634)"
+        default=91,
+        help="ID оз. Балхаш в DAHITI (по умолчанию: 91)"
     )
 
     parser.add_argument(
@@ -141,11 +135,11 @@ def step_init(args):
         print("   Пропускаем инициализацию Earth Engine (будет запрошена при первом использовании)")
 
     # Проверка DAHITI
-    if args.dahiti_user and args.dahiti_pass:
-        print(f"✅ DAHITI credentials настроены (user: {args.dahiti_user})")
+    if args.dahiti_api_key:
+        print("✅ DAHITI API-ключ настроен")
     else:
-        print("⚠️ DAHITI credentials не указаны. Используйте --dahiti-user/--dahiti-pass")
-        print("   или переменные окружения DAHITI_USER / DAHITI_PASS")
+        print("⚠️ DAHITI API-ключ не указан. Используйте --dahiti-api-key")
+        print("   или переменную окружения DAHITI_API_KEY")
 
     print("\n✅ Инициализация завершена")
     return True
@@ -262,15 +256,48 @@ def step_train(args):
         df.to_csv("data/processed/training_data.csv", index=False)
         print(f"   ✅ Сгенерировано {len(df)} синтетических записей")
     else:
-        print("📡 Загрузка реальных данных из Earth Engine...")
-        print("   (Для больших объёмов рекомендуется использовать export в Google Drive)")
-        print("   См. features.py::export_training_data_batch()")
+        import pandas as pd
 
-        # Здесь можно добавить код для загрузки из Earth Engine
-        # Для happy path — используем демо-данные
-        print("   ⚠️ Для реальных данных используйте batch export через Earth Engine")
-        args.use_demo = True
-        return step_train(args)
+        if not args.project_id:
+            print("❌ Не указан --project-id / EE_PROJECT_ID — невозможно инициализировать Earth Engine")
+            return False
+
+        from data_loader import init_ee, get_train_region, create_grace_grid
+        from features import extract_features_for_month, preprocess_training_data
+
+        init_ee(project_id=args.project_id)
+
+        print("📡 Загрузка реальных данных из Earth Engine (GRACE + CHIRPS + MOD16 ET + MOD13 NDVI)...")
+
+        region = get_train_region()
+        grid = create_grace_grid(region, scale_deg=0.5)
+        grid_size = grid.size().getInfo()
+
+        years = list(range(args.train_start, args.test_end + 1))
+        months = list(range(1, 13))
+        print(f"   Период: {years[0]}-{years[-1]} ({len(years) * 12} месяцев), сетка: {grid_size} ячеек")
+
+        frames = []
+        for year in years:
+            for month in months:
+                try:
+                    month_df = extract_features_for_month(year, month, grid, region)
+                    frames.append(month_df)
+                except Exception as e:
+                    print(f"   ⚠️ Пропуск {year}-{month:02d}: {e}")
+            print(f"   ... {year} готов ({len(frames)} месяцев накоплено из {len(years) * 12})")
+
+        if not frames:
+            print("❌ Не удалось загрузить ни одного месяца данных из Earth Engine.")
+            print("   Для очень больших объёмов используйте export_training_data_batch() (см. features.py)")
+            return False
+
+        raw_df = pd.concat(frames, ignore_index=True)
+        df = preprocess_training_data(raw_df)
+
+        os.makedirs("data/processed", exist_ok=True)
+        df.to_csv("data/processed/training_data.csv", index=False)
+        print(f"   ✅ Загружено {len(df)} записей из Earth Engine")
 
     # Обучение модели
     from model import train_model
@@ -344,9 +371,62 @@ def step_predict(args):
         pred_df.to_csv("data/processed/predictions_aggregated.csv", index=False)
         print(f"   ✅ Сгенерировано {len(pred_df)} месячных предсказаний")
     else:
-        print("📡 Реальное предсказание через Earth Engine...")
-        print("   (Требуется экспорт признаков, предсказание в numpy, импорт обратно)")
-        print("   См. model.py::predict_batch()")
+        if not args.project_id:
+            print("❌ Не указан --project-id / EE_PROJECT_ID — невозможно инициализировать Earth Engine")
+            return False
+
+        import numpy as np
+        import pandas as pd
+        from data_loader import init_ee, get_basin_bbox, create_grace_grid
+        from features import extract_features_for_month
+
+        init_ee(project_id=args.project_id)
+
+        print("📡 Реальное предсказание на сетке бассейна Или-Балхаш (0.5°) через Earth Engine...")
+        print("   Примечание: агрегированный ряд для валидации строится на сетке GRACE (0.5°),")
+        print("   а не на полном растре 500 м — для 500 м см. model.py::predict_batch() (экспорт в Drive)")
+
+        region = get_basin_bbox()
+        grid = create_grace_grid(region, scale_deg=0.5)
+        feature_cols = ["precip_mean", "et_mean", "ndvi_mean", "month_sin", "month_cos"]
+
+        years = list(range(args.train_start, args.test_end + 1))
+        months = list(range(1, 13))
+
+        rows = []
+        for year in years:
+            for month in months:
+                try:
+                    month_df = extract_features_for_month(year, month, grid, region)
+                except Exception as e:
+                    print(f"   ⚠️ Пропуск {year}-{month:02d}: {e}")
+                    continue
+
+                month_df = month_df.dropna(subset=["precip_mean", "et_mean", "ndvi_mean"])
+                if month_df.empty:
+                    continue
+
+                month_df["month_sin"] = np.sin(2 * np.pi * month_df["month"] / 12)
+                month_df["month_cos"] = np.cos(2 * np.pi * month_df["month"] / 12)
+
+                preds = model.predict(month_df[feature_cols].values)
+
+                rows.append({
+                    "date": pd.Timestamp(year=year, month=month, day=1),
+                    "grace_mean": preds.mean(),
+                    "grace_std": preds.std(),
+                    "pixel_count": len(preds)
+                })
+            print(f"   ... {year} готов ({len(rows)} месяцев накоплено)")
+
+        if not rows:
+            print("❌ Не удалось получить ни одного предсказания из Earth Engine.")
+            return False
+
+        pred_df = pd.DataFrame(rows)
+        os.makedirs("data/processed", exist_ok=True)
+        pred_df.to_csv("data/processed/predictions_aggregated.csv", index=False)
+        print(f"   ✅ Сохранено {len(pred_df)} месячных предсказаний")
 
     print("\n✅ Предсказание завершено")
     return True
@@ -362,12 +442,13 @@ def step_validate(args):
     print("✅ ЭТАП 4: Валидация")
     print("=" * 60)
 
+    import pandas as pd
+
     # Загружаем DAHITI
     if args.use_demo:
         print("📊 Демо-режим: генерируем синтетические данные DAHITI...")
 
         import numpy as np
-        import pandas as pd
 
         dates = pd.date_range("2002-04-01", "2024-12-01", freq="MS")
         n = len(dates)
@@ -387,17 +468,18 @@ def step_validate(args):
     else:
         from data_loader import fetch_dahiti_water_level
 
-        if args.dahiti_user and args.dahiti_pass:
+        if args.dahiti_api_key:
             dahiti_df = fetch_dahiti_water_level(
-                username=args.dahiti_user,
-                password=args.dahiti_pass,
+                api_key=args.dahiti_api_key,
                 dahiti_id=args.dahiti_id,
                 output_path="data/raw/dahiti_balkhash.json"
             )
         else:
-            print("⚠️ DAHITI credentials не указаны, используем демо-данные")
-            args.use_demo = True
-            return step_validate(args)
+            print("⚠️ DAHITI API-ключ не указан, используем демо-данные")
+            import copy
+            demo_args = copy.copy(args)
+            demo_args.use_demo = True
+            return step_validate(demo_args)
 
     # Загружаем предсказания
     pred_df = pd.read_csv("data/processed/predictions_aggregated.csv")

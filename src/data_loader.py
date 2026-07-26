@@ -172,14 +172,18 @@ def get_chirps_monthly(start_date: str = "2002-04-01", end_date: str = None):
             "system:time_start": start.millis()
         })
 
-    years = ee.List.sequence(2002, 2024)
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
+    years_list = list(range(start_dt.year, end_dt.year + 1))
+
+    years = ee.List(years_list)
     months = ee.List.sequence(1, 12)
 
     monthly_ic = ee.ImageCollection.fromImages(
         years.map(lambda y: months.map(lambda m: monthly_sum(y, m))).flatten()
     )
 
-    return monthly_ic
+    return monthly_ic.filterDate(start_date, end_date)
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 4. MODIS ET
@@ -217,14 +221,18 @@ def get_mod16_et(start_date: str = "2002-04-01", end_date: str = None,
             "system:time_start": start.millis()
         })
 
-    years = ee.List.sequence(2002, 2024)
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
+    years_list = list(range(start_dt.year, end_dt.year + 1))
+
+    years = ee.List(years_list)
     months = ee.List.sequence(1, 12)
 
     monthly_ic = ee.ImageCollection.fromImages(
         years.map(lambda y: months.map(lambda m: monthly_mean(y, m))).flatten()
     )
 
-    return monthly_ic
+    return monthly_ic.filterDate(start_date, end_date)
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 5. MODIS NDVI
@@ -261,14 +269,18 @@ def get_mod13_ndvi(start_date: str = "2002-04-01", end_date: str = None):
             "system:time_start": start.millis()
         })
 
-    years = ee.List.sequence(2002, 2024)
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
+    years_list = list(range(start_dt.year, end_dt.year + 1))
+
+    years = ee.List(years_list)
     months = ee.List.sequence(1, 12)
 
     monthly_ic = ee.ImageCollection.fromImages(
         years.map(lambda y: months.map(lambda m: monthly_mean(y, m))).flatten()
     )
 
-    return monthly_ic
+    return monthly_ic.filterDate(start_date, end_date)
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 6. DAHITI API — уровень оз. Балхаш
@@ -277,37 +289,36 @@ def get_mod13_ndvi(start_date: str = "2002-04-01", end_date: str = None):
 DAHITI_BASE_URL = "https://dahiti.dgfi.tum.de/api/v2/"
 
 
-def fetch_dahiti_water_level(username: str, password: str, 
-                              dahiti_id: int = 1000133634,
+def fetch_dahiti_water_level(api_key: str,
+                              dahiti_id: int = 91,
                               output_path: str = "data/raw/dahiti_balkhash.json"):
     """
     Загрузить данные об уровне воды оз. Балхаш из DAHITI API v2.
 
+    DAHITI API v2 аутентифицируется персональным api_key, а не логином/паролем
+    от сайта (см. https://dahiti.dgfi.tum.de/en/frequently-asked-questions/api-key/).
+
     Args:
-        username: логин DAHITI
-        password: пароль DAHITI
-        dahiti_id: ID оз. Балхаш в DAHITI (по умолчанию ~1000133634)
+        api_key: персональный DAHITI API-ключ
+        dahiti_id: ID оз. Балхаш в DAHITI (91, см. https://dahiti.dgfi.tum.de/en/91/)
         output_path: куда сохранить JSON
 
     Returns:
         pd.DataFrame с колонками [date, water_level]
     """
     params = {
-        "username": username,
-        "password": password,
+        "api_key": api_key,
         "dahiti_id": dahiti_id,
         "format": "json"
     }
 
-    response = requests.get(DAHITI_BASE_URL, params=params, timeout=60)
+    response = requests.get(DAHITI_BASE_URL + "download-water-level/", params=params, timeout=60)
     response.raise_for_status()
 
     data = response.json()
 
-    # Сохраняем сырые данные
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    if isinstance(data, dict) and data.get("statuscode") not in (None, 200):
+        raise ValueError(f"DAHITI API вернул ошибку: {data.get('message', data)}")
 
     # Преобразуем в DataFrame
     if isinstance(data, list):
@@ -317,6 +328,9 @@ def fetch_dahiti_water_level(username: str, password: str,
     else:
         df = pd.DataFrame(data)
 
+    # DAHITI v2 возвращает "wse" (water surface elevation) вместо "water_level"
+    df = df.rename(columns={"wse": "water_level", "wse_u": "water_level_uncertainty"})
+
     # Приводим даты
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])
@@ -325,6 +339,11 @@ def fetch_dahiti_water_level(username: str, password: str,
 
     # Сортируем по дате
     df = df.sort_values("date").reset_index(drop=True)
+
+    # Сохраняем в едином плоском формате [date, water_level, ...],
+    # совместимом с load_dahiti_local() и dashboard
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    df.to_json(output_path, orient="records", date_format="iso")
 
     print(f"✅ DAHITI: загружено {len(df)} записей, период {df['date'].min()} — {df['date'].max()}")
 

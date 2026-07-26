@@ -44,8 +44,8 @@ pip install -r requirements.txt
 
 #### DAHITI (уровень оз. Балхаш)
 1. Зарегистрируйтесь на [dahiti.dgfi.tum.de](https://dahiti.dgfi.tum.de/)
-2. Получите логин/пароль для API v2
-3. ID оз. Балхаш: `1000133634` (по умолчанию)
+2. Получите персональный **API-ключ** в личном кабинете (это не логин/пароль от сайта — см. [FAQ](https://dahiti.dgfi.tum.de/en/frequently-asked-questions/api-key/))
+3. ID оз. Балхаш: `91` (по умолчанию)
 
 ### 3. Запуск пайплайна
 
@@ -58,7 +58,7 @@ python run_pipeline.py --step init --project-id YOUR_PROJECT_ID
 python run_pipeline.py --step explore
 python run_pipeline.py --step train
 python run_pipeline.py --step predict --year 2023 --month 6
-python run_pipeline.py --step validate --dahiti-user USER --dahiti-pass PASS
+python run_pipeline.py --step validate --dahiti-api-key YOUR_DAHITI_API_KEY
 python run_pipeline.py --step dashboard
 ```
 

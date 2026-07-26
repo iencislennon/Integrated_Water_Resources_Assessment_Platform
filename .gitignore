@@ -24,3 +24,5 @@ data/processed/
 models/*.pkl
 assets/validation_plot.html
 assets/validation_report.md
+
+problem_list.txt

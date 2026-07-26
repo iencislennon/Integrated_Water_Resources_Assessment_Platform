@@ -459,9 +459,7 @@ def main():
             y=dahiti_filtered["water_level"],
             mode="lines",
             name="Уровень оз. Балхаш",
-            line=dict(color="#ff7f0e", width=2),
-            fill="tozeroy",
-            fillcolor="rgba(255, 127, 14, 0.1)"
+            line=dict(color="#ff7f0e", width=2)
         ),
         row=2, col=1
     )
@@ -475,7 +473,22 @@ def main():
     )
 
     fig_ts.update_yaxes(title_text="Аномалия, см", row=1, col=1)
-    fig_ts.update_yaxes(title_text="Уровень, м", row=2, col=1)
+
+    # Уровень озера меняется в узком диапазоне (~десятки см) на фоне
+    # абсолютной высоты в сотни метров — фиксируем диапазон по данным,
+    # а не от нуля, иначе вариации не видны на графике.
+    if len(dahiti_filtered) > 0:
+        level_min = dahiti_filtered["water_level"].min()
+        level_max = dahiti_filtered["water_level"].max()
+        pad = max((level_max - level_min) * 0.1, 0.05)
+        fig_ts.update_yaxes(
+            title_text="Уровень, м",
+            range=[level_min - pad, level_max + pad],
+            row=2, col=1
+        )
+    else:
+        fig_ts.update_yaxes(title_text="Уровень, м", row=2, col=1)
+
     fig_ts.update_xaxes(title_text="Год", row=2, col=1)
 
     st.plotly_chart(fig_ts, use_container_width=True)
