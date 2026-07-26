@@ -18,11 +18,10 @@ __pycache__/
 .idea/
 .DS_Store
 
-# Data and models (large files, local raw data)
-data/raw/dahiti_balkhash.json
-data/processed/
+# Data and models (large files not needed for the dashboard)
+data/processed/training_data.csv
+data/processed/predictions_500m/
 models/*.pkl
-assets/validation_plot.html
 assets/validation_report.md
 
 problem_list.txt
