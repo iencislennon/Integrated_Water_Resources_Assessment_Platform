@@ -228,6 +228,18 @@ def combine_csv_files(csv_dir: str, output_path: str = "data/processed/training_
 LAG_SOURCE_COLS = ["precip_mean", "et_mean", "ndvi_mean"]
 LAG_MONTHS = (1, 2, 3)
 
+# Авторегрессионный лаг самой GRACE (месяц T-1) — аномалия запасов меняется
+# плавно месяц к месяцу, поэтому этот признак резко поднимает test R^2 и
+# корреляцию с DAHITI. ВАЖНО: GRACE физически не имеет разрешения тоньше
+# ~55 км/mascon, поэтому grace_lwe_lag1 одинаков для всех ячеек 0.5° внутри
+# одного mascon — прирост качества в основном отражает персистентность
+# (t-1 ≈ t), а не то, что модель научилась лучше разделять пространственный
+# сигнал внутри бассейна. Для чистого "даунскейлинга" (предсказание без
+# доступа к предыдущему GRACE) используйте DOWNSCALING_FEATURE_COLS_NO_AR
+# в model.py.
+TARGET_LAG_SOURCE_COL = "grace_lwe"
+TARGET_LAG_MONTHS = (1,)
+
 
 def preprocess_training_data(
     df: pd.DataFrame,
@@ -272,6 +284,10 @@ def preprocess_training_data(
     for col in LAG_SOURCE_COLS:
         for lag in LAG_MONTHS:
             df_clean[f"{col}_lag{lag}"] = df_clean.groupby(["lat", "lon"])[col].shift(lag)
+
+    # Авторегрессионный лаг GRACE (см. предупреждение у TARGET_LAG_MONTHS выше)
+    for lag in TARGET_LAG_MONTHS:
+        df_clean[f"{TARGET_LAG_SOURCE_COL}_lag{lag}"] = df_clean.groupby(["lat", "lon"])[TARGET_LAG_SOURCE_COL].shift(lag)
 
     # Строки без полной истории (первые месяцы каждой ячейки) для лагов бесполезны
     df_clean = df_clean.dropna().copy()
