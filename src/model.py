@@ -11,6 +11,19 @@ from sklearn.metrics import mean_squared_error, r2_score
 import joblib
 import os
 
+# Признаки по умолчанию для реальных (не демо) данных: precip/et/ndvi + месяц
+# циклически, координаты ячейки (lat, lon) и лаги 1-3 мес. (см. features.py).
+# lat/lon позволяют модели различать регионы внутри широкой обучающей области
+# (Казахстан + Центральная Азия), лаги — учитывают задержку гидрологического
+# отклика (регулируемый сброс Капшагайского водохранилища и т.п.).
+DOWNSCALING_FEATURE_COLS = [
+    "precip_mean", "et_mean", "ndvi_mean", "month_sin", "month_cos",
+    "lat", "lon",
+    "precip_mean_lag1", "precip_mean_lag2", "precip_mean_lag3",
+    "et_mean_lag1", "et_mean_lag2", "et_mean_lag3",
+    "ndvi_mean_lag1", "ndvi_mean_lag2", "ndvi_mean_lag3",
+]
+
 # ───────────────────────────────────────────────────────────────────────────────
 # 1. Обучение модели
 # ───────────────────────────────────────────────────────────────────────────────
@@ -41,7 +54,7 @@ def train_model(
     """
     # Признаки по умолчанию
     if feature_cols is None:
-        feature_cols = ["precip_mean", "et_mean", "ndvi_mean", "month_sin", "month_cos"]
+        feature_cols = DOWNSCALING_FEATURE_COLS
 
     # Параметры модели по умолчанию
     if model_params is None:

@@ -22,6 +22,5 @@ __pycache__/
 data/processed/training_data.csv
 data/processed/predictions_500m/
 models/*.pkl
-assets/validation_report.md
 
 problem_list.txt

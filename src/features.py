@@ -222,6 +222,13 @@ def combine_csv_files(csv_dir: str, output_path: str = "data/processed/training_
 # 4. Предобработка (очистка, фильтрация выбросов)
 # ───────────────────────────────────────────────────────────────────────────────
 
+# Лаговые признаки: гидрологический отклик не мгновенный (регулируемый сброс
+# Капшагайского водохранилища создаёт задержку между осадками/ET и сигналом GRACE) —
+# без них RandomForest не видит предысторию ячейки, только текущий месяц.
+LAG_SOURCE_COLS = ["precip_mean", "et_mean", "ndvi_mean"]
+LAG_MONTHS = (1, 2, 3)
+
+
 def preprocess_training_data(
     df: pd.DataFrame,
     iqr_multiplier: float = 3.0
@@ -230,7 +237,8 @@ def preprocess_training_data(
     Очистка обучающих данных:
     1. Удаление строк с NaN
     2. Фильтрация выбросов по IQR для grace_lwe
-    3. Добавление временных признаков (sin/cos месяца)
+    3. Лаговые признаки (1-3 мес.) по каждой ячейке сетки (lat, lon)
+    4. Добавление временных признаков (sin/cos месяца)
 
     Args:
         df: DataFrame с сырыми данными
@@ -253,10 +261,21 @@ def preprocess_training_data(
     upper = q3 + iqr_multiplier * iqr
 
     df_clean = df_clean[
-        (df_clean["grace_lwe"] >= lower) & 
+        (df_clean["grace_lwe"] >= lower) &
         (df_clean["grace_lwe"] <= upper)
     ].copy()
     print(f"После фильтрации выбросов: {len(df_clean)}")
+
+    # Лаговые признаки: сортируем по ячейке и времени, сдвигаем на 1-3 месяца
+    # внутри каждой ячейки (lat, lon), иначе сдвиг "перетечёт" между соседними ячейками
+    df_clean = df_clean.sort_values(["lat", "lon", "year", "month"])
+    for col in LAG_SOURCE_COLS:
+        for lag in LAG_MONTHS:
+            df_clean[f"{col}_lag{lag}"] = df_clean.groupby(["lat", "lon"])[col].shift(lag)
+
+    # Строки без полной истории (первые месяцы каждой ячейки) для лагов бесполезны
+    df_clean = df_clean.dropna().copy()
+    print(f"После добавления лагов (1-{LAG_MONTHS[-1]} мес.): {len(df_clean)}")
 
     # Временные признаки (циклические)
     df_clean["month_sin"] = np.sin(2 * np.pi * df_clean["month"] / 12)
@@ -265,7 +284,7 @@ def preprocess_training_data(
     # Дата для удобства
     df_clean["date"] = pd.to_datetime(df_clean[["year", "month"]].assign(day=1))
 
-    return df_clean
+    return df_clean.reset_index(drop=True)
 
 
 # ───────────────────────────────────────────────────────────────────────────────

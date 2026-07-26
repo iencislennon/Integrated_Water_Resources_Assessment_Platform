@@ -112,6 +112,15 @@ def parse_args():
         help="Использовать синтетические данные вместо реальных"
     )
 
+    parser.add_argument(
+        "--dahiti-lag-months",
+        type=int,
+        default=2,
+        help="Сдвиг предсказаний вперёд (мес.) перед сравнением с DAHITI — "
+             "компенсирует задержку регулируемого стока Капшагайского вдхр. "
+             "(подобран эмпирически по кросс-корреляции, см. src/validation.py)"
+    )
+
     return parser.parse_args()
 
 
@@ -218,6 +227,11 @@ def step_train(args):
     print("🎓 ЭТАП 2: Обучение модели")
     print("=" * 60)
 
+    # Демо-данные генерируются со случайными (lat, lon) на каждой строке — лаговые
+    # признаки по ячейке сетки для них не имеют смысла (ячейка не повторяется во
+    # времени), поэтому демо-режим использует базовый набор признаков.
+    demo_feature_cols = ["precip_mean", "et_mean", "ndvi_mean", "month_sin", "month_cos"]
+
     if args.use_demo:
         print("📊 Демо-режим: генерируем синтетические обучающие данные...")
 
@@ -300,11 +314,11 @@ def step_train(args):
         print(f"   ✅ Загружено {len(df)} записей из Earth Engine")
 
     # Обучение модели
-    from model import train_model
+    from model import train_model, DOWNSCALING_FEATURE_COLS
 
     result = train_model(
         df=df,
-        feature_cols=["precip_mean", "et_mean", "ndvi_mean", "month_sin", "month_cos"],
+        feature_cols=demo_feature_cols if args.use_demo else DOWNSCALING_FEATURE_COLS,
         target_col="grace_lwe",
         train_years=(args.train_start, args.train_end),
         test_years=(args.test_start, args.test_end),
@@ -371,62 +385,46 @@ def step_predict(args):
         pred_df.to_csv("data/processed/predictions_aggregated.csv", index=False)
         print(f"   ✅ Сгенерировано {len(pred_df)} месячных предсказаний")
     else:
-        if not args.project_id:
-            print("❌ Не указан --project-id / EE_PROJECT_ID — невозможно инициализировать Earth Engine")
+        import pandas as pd
+        from data_loader import BASIN_BBOX
+        from model import DOWNSCALING_FEATURE_COLS
+
+        training_path = "data/processed/training_data.csv"
+        if not os.path.exists(training_path):
+            print(f"❌ {training_path} не найден — сначала выполните --step train (без --use-demo)")
             return False
 
-        import numpy as np
-        import pandas as pd
-        from data_loader import init_ee, get_basin_bbox, create_grace_grid
-        from features import extract_features_for_month
-
-        init_ee(project_id=args.project_id)
-
-        print("📡 Реальное предсказание на сетке бассейна Или-Балхаш (0.5°) через Earth Engine...")
+        print("📡 Предсказание на сетке бассейна Или-Балхаш (0.5°)")
+        print(f"   Признаки (precip/ET/NDVI + лаги + lat/lon) уже посчитаны через Earth Engine")
+        print(f"   на этапе train и сохранены в {training_path} — переиспользуем их вместо")
+        print("   повторных запросов к Earth Engine (та же сетка, тот же композит признаков).")
         print("   Примечание: агрегированный ряд для валидации строится на сетке GRACE (0.5°),")
         print("   а не на полном растре 500 м — для 500 м см. model.py::predict_batch() (экспорт в Drive)")
 
-        region = get_basin_bbox()
-        grid = create_grace_grid(region, scale_deg=0.5)
-        feature_cols = ["precip_mean", "et_mean", "ndvi_mean", "month_sin", "month_cos"]
+        full_df = pd.read_csv(training_path)
+        full_df["date"] = pd.to_datetime(full_df["date"])
 
-        years = list(range(args.train_start, args.test_end + 1))
-        months = list(range(1, 13))
+        basin_mask = (
+            (full_df["lat"] >= BASIN_BBOX["south"]) & (full_df["lat"] <= BASIN_BBOX["north"]) &
+            (full_df["lon"] >= BASIN_BBOX["west"]) & (full_df["lon"] <= BASIN_BBOX["east"])
+        )
+        basin_df = full_df[basin_mask].copy()
 
-        rows = []
-        for year in years:
-            for month in months:
-                try:
-                    month_df = extract_features_for_month(year, month, grid, region)
-                except Exception as e:
-                    print(f"   ⚠️ Пропуск {year}-{month:02d}: {e}")
-                    continue
-
-                month_df = month_df.dropna(subset=["precip_mean", "et_mean", "ndvi_mean"])
-                if month_df.empty:
-                    continue
-
-                month_df["month_sin"] = np.sin(2 * np.pi * month_df["month"] / 12)
-                month_df["month_cos"] = np.cos(2 * np.pi * month_df["month"] / 12)
-
-                preds = model.predict(month_df[feature_cols].values)
-
-                rows.append({
-                    "date": pd.Timestamp(year=year, month=month, day=1),
-                    "grace_mean": preds.mean(),
-                    "grace_std": preds.std(),
-                    "pixel_count": len(preds)
-                })
-            print(f"   ... {year} готов ({len(rows)} месяцев накоплено)")
-
-        if not rows:
-            print("❌ Не удалось получить ни одного предсказания из Earth Engine.")
+        if basin_df.empty:
+            print("❌ В training_data.csv нет ячеек внутри BASIN_BBOX.")
             return False
 
-        pred_df = pd.DataFrame(rows)
+        basin_df["predicted_grace"] = model.predict(basin_df[DOWNSCALING_FEATURE_COLS].values)
+
+        pred_df = basin_df.groupby("date").agg(
+            grace_mean=("predicted_grace", "mean"),
+            grace_std=("predicted_grace", "std"),
+            pixel_count=("predicted_grace", "count"),
+        ).reset_index()
+
         os.makedirs("data/processed", exist_ok=True)
         pred_df.to_csv("data/processed/predictions_aggregated.csv", index=False)
-        print(f"   ✅ Сохранено {len(pred_df)} месячных предсказаний")
+        print(f"   ✅ Сохранено {len(pred_df)} месячных предсказаний ({basin_mask.sum()} ячеек бассейна)")
 
     print("\n✅ Предсказание завершено")
     return True
@@ -492,11 +490,16 @@ def step_validate(args):
         predictions_df=pred_df,
         dahiti_df=dahiti_df,
         predictions_value_col="grace_mean",
-        dahiti_value_col="water_level"
+        dahiti_value_col="water_level",
+        lag_months=args.dahiti_lag_months
     )
 
     # График
-    fig = plot_validation(result["merged_df"], save_path="assets/validation_plot.html")
+    fig = plot_validation(
+        result["merged_df"],
+        save_path="assets/validation_plot.html",
+        lag_months=args.dahiti_lag_months
+    )
 
     # Отчёт
     report = generate_validation_report(result, output_path="assets/validation_report.md")

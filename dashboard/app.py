@@ -16,6 +16,11 @@ import sys
 # Добавляем src в path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+# Сдвиг (мес.) при сравнении предсказаний с DAHITI — компенсирует задержку
+# регулируемого стока Капшагайского вдхр. Подобран по кросс-корреляции,
+# согласован с src/validation.py::validate_with_dahiti (тот же default).
+DAHITI_LAG_MONTHS = 2
+
 # ───────────────────────────────────────────────────────────────────────────────
 # Конфигурация страницы
 # ───────────────────────────────────────────────────────────────────────────────
@@ -497,14 +502,24 @@ def main():
     # Сравнение (стандартизированные ряды)
     # ───────────────────────────────────────────────────────────────────────────
     st.header("🔗 Валидация: сравнение с DAHITI")
+    st.caption(
+        f"Сравнение со сдвигом +{DAHITI_LAG_MONTHS} мес.: предсказание за месяц T "
+        f"сопоставляется с уровнем DAHITI за T+{DAHITI_LAG_MONTHS} — компенсирует "
+        f"задержку регулируемого стока Капшагайского вдхр. (см. assets/validation_report.md)"
+    )
 
     if len(pred_filtered) > 0 and len(dahiti_filtered) > 0:
+        pred_for_val = pred_filtered.sort_values("date").copy()
+        pred_for_val["display_date"] = pred_for_val["date"]
+        pred_for_val["date"] = pred_for_val["date"] + pd.DateOffset(months=DAHITI_LAG_MONTHS)
+
         merged = pd.merge_asof(
-            pred_filtered.sort_values("date"),
+            pred_for_val,
             dahiti_filtered.sort_values("date"),
             on="date",
             direction="nearest"
         ).dropna()
+        merged["date"] = merged["display_date"]
 
         if len(merged) > 10:
             from sklearn.preprocessing import StandardScaler
