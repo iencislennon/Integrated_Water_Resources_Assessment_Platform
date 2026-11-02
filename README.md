@@ -39,8 +39,8 @@ The platform combines large-scale satellite observations with higher-resolution 
 ### 1. Installation
 
 ```bash
-git clone <repo-url>
-cd ili-balkhash-water-platform
+git clone https://github.com/iencislennon/Integrated_Water_Resources_Assessment_Platform
+cd Integrated_Water_Resources_Assessment_Platform
 
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
@@ -357,8 +357,8 @@ Developed as a prototype for the **Oxford Saïd Global Climate Tech Challenge 20
 ### 1. 安装
 
 ```bash
-git clone <repo-url>
-cd ili-balkhash-water-platform
+git clone https://github.com/iencislennon/Integrated_Water_Resources_Assessment_Platform
+cd Integrated_Water_Resources_Assessment_Platform
 
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
@@ -659,8 +659,8 @@ MIT License。
 ### 1. Установка
 
 ```bash
-git clone <repo-url>
-cd ili-balkhash-water-platform
+git clone https://github.com/iencislennon/Integrated_Water_Resources_Assessment_Platform
+cd Integrated_Water_Resources_Assessment_Platform
 
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
